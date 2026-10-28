@@ -1,0 +1,93 @@
+name: Release App
+
+on:
+  push:
+    tags:
+      - "v*" # Triggert bei Tags wie v1.0.0, v1.0.1 etc.
+
+jobs:
+  release:
+    permissions:
+      contents: write # Erforderlich, um Assets an GitHub Releases anzuhängen
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest" # Baut macOS .dmg (Apple Silicon & Universal)
+            args: "--target universal-apple-darwin"
+          - platform: "ubuntu-26.04" # Baut Linux .deb und .AppImage
+            args: ""
+          - platform: "windows-latest" # Baut Windows .msi und .exe
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 1. Node.js & pnpm Setup
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      # 2. Rust Toolchain Setup
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Für macOS Universal-Binaries (Intel + Apple Silicon)
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # 3. Linux-spezifische Systembibliotheken installieren
+      - name: Install Linux Dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # 4. Frontend-Abhängigkeiten installieren
+      - name: Install Frontend Dependencies
+        run: pnpm install
+
+      # 5. Build & Packaging via official Tauri Action
+      - name: Build Tauri App & Publish Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "ZUGFeRD Studio ${{ github.ref_name }}"
+          releaseBody: |
+            Automatisch generierter Release für ZUGFeRD Studio ${{ github.ref_name }}.
+
+            ### Änderungen & Enthaltene Pakete:
+            - **macOS:** Universal `.dmg` (Apple Silicon & Intel)
+            - **Windows:** `.msi` Installer & Setup `.exe`
+            - **Linux:** `.deb` Paket & portables `.AppImage`
+
+            Alle Berechnungen, Validierungen und PDF-Manipulationen laufen zu 100 % lokal auf deinem Rechner.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
